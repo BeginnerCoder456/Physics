@@ -118,7 +118,7 @@ TEXT_MODELS = [
 ]
 
 # Vision model used automatically when an image is attached
-VISION_MODEL = "llama-3.2-11b-vision-preview"
+VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
