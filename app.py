@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Physics Helper GUI — powered by Claude AI.
+Physics Helper GUI — powered by Groq AI.
 Run with:  streamlit run app.py
 """
 
 import base64
 import streamlit as st
-import anthropic
+from groq import Groq
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -100,42 +100,50 @@ FORMULA_SHEETS = {
 }
 
 CONSTANTS = {
-    "g  (gravity)":          "9.80665 m/s²",
-    "G  (gravitational)":    "6.674 × 10⁻¹¹ N·m²/kg²",
-    "c  (light speed)":      "2.998 × 10⁸ m/s",
-    "h  (Planck)":           "6.626 × 10⁻³⁴ J·s",
-    "k  (Coulomb)":          "8.988 × 10⁹ N·m²/C²",
-    "k_B (Boltzmann)":       "1.381 × 10⁻²³ J/K",
-    "R  (gas constant)":     "8.314 J/(mol·K)",
-    "e  (elem. charge)":     "1.602 × 10⁻¹⁹ C",
-    "N_A (Avogadro)":        "6.022 × 10²³ mol⁻¹",
+    "g  (gravity)":       "9.80665 m/s²",
+    "G  (gravitational)": "6.674 × 10⁻¹¹ N·m²/kg²",
+    "c  (light speed)":   "2.998 × 10⁸ m/s",
+    "h  (Planck)":        "6.626 × 10⁻³⁴ J·s",
+    "k  (Coulomb)":       "8.988 × 10⁹ N·m²/C²",
+    "k_B (Boltzmann)":    "1.381 × 10⁻²³ J/K",
+    "R  (gas constant)":  "8.314 J/(mol·K)",
+    "e  (elem. charge)":  "1.602 × 10⁻¹⁹ C",
+    "N_A (Avogadro)":     "6.022 × 10²³ mol⁻¹",
 }
+
+# Text-only models (fast, high quality)
+TEXT_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama3-8b-8192",
+]
+
+# Vision model used automatically when an image is attached
+VISION_MODEL = "llama-3.2-11b-vision-preview"
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.title("⚛ Physics Helper")
-    st.caption("Powered by Claude AI")
+    st.caption("Powered by Groq AI (free)")
 
     st.divider()
 
     api_key = st.text_input(
-        "Anthropic API Key",
+        "Groq API Key",
         type="password",
-        placeholder="sk-ant-...",
-        help="Get your free key at console.anthropic.com",
+        placeholder="gsk_...",
+        help="Free key at console.groq.com",
     )
 
     model = st.selectbox(
-        "Model",
-        ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        "Model (text)",
+        TEXT_MODELS,
         index=0,
-        help="Sonnet is smarter; Haiku is faster.",
+        help="Used for text questions. Vision model is selected automatically for images.",
     )
 
     st.divider()
 
-    # Formula quick reference
     st.subheader("📐 Formula Sheets")
     for topic, formulas in FORMULA_SHEETS.items():
         with st.expander(topic):
@@ -158,25 +166,22 @@ with st.sidebar:
 # ── Session state ─────────────────────────────────────────────────────────────
 
 if "messages" not in st.session_state:
-    st.session_state.messages = []        # list of {role, text, image_b64, image_type}
+    st.session_state.messages = []
 
 if "pending_image" not in st.session_state:
-    st.session_state.pending_image = None  # {b64, media_type, display_bytes}
+    st.session_state.pending_image = None
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 
 st.title("⚛ Physics Helper")
-st.caption(
-    "Type a question **or** upload a photo of your problem — I'll solve it step by step."
-)
+st.caption("Type a question **or** upload a photo of your problem — I'll solve it step by step.")
 
-# ── Image uploader (sits above chat, clears after use) ────────────────────────
+# ── Image uploader ────────────────────────────────────────────────────────────
 
 uploaded = st.file_uploader(
     "📷 Attach a problem image (optional)",
-    type=["png", "jpg", "jpeg", "webp", "gif"],
+    type=["png", "jpg", "jpeg", "webp"],
     label_visibility="visible",
-    key="uploader",
 )
 
 if uploaded is not None:
@@ -188,7 +193,7 @@ if uploaded is not None:
     }
     st.image(raw, caption="Image attached — ask your question below", width=400)
 
-# ── Render conversation history ───────────────────────────────────────────────
+# ── Conversation history ──────────────────────────────────────────────────────
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -201,82 +206,79 @@ for msg in st.session_state.messages:
 prompt = st.chat_input("Ask a physics question…")
 
 if prompt:
-    # Validate API key
     if not api_key:
-        st.error("⚠️ Please enter your Anthropic API key in the sidebar to get started.")
+        st.error("⚠️ Enter your Groq API key in the sidebar. Get one free at console.groq.com")
         st.stop()
 
-    # ── Show user message ──────────────────────────────────────────────────────
     img_info = st.session_state.pending_image
+    active_model = VISION_MODEL if img_info else model
+
+    # Show user message
     with st.chat_message("user"):
         if img_info:
             st.image(img_info["display_bytes"], width=300)
         st.markdown(prompt)
 
-    # Save to history
     st.session_state.messages.append({
         "role": "user",
         "text": prompt,
         "image_bytes": img_info["display_bytes"] if img_info else None,
     })
 
-    # ── Build API message list ─────────────────────────────────────────────────
-    api_messages = []
+    # Build Groq message list
+    api_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    for past in st.session_state.messages[:-1]:   # all but current
-        if past["role"] == "user":
-            api_messages.append({"role": "user", "content": past["text"]})
-        else:
-            api_messages.append({"role": "assistant", "content": past["text"]})
+    for past in st.session_state.messages[:-1]:
+        api_messages.append({"role": past["role"], "content": past["text"]})
 
-    # Current user turn (may include image)
-    current_content = []
+    # Current turn — include image if present (Groq uses OpenAI image_url format)
     if img_info:
-        current_content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": img_info["media_type"],
-                "data": img_info["b64"],
-            },
-        })
-    current_content.append({"type": "text", "text": prompt})
+        data_url = f"data:{img_info['media_type']};base64,{img_info['b64']}"
+        current_content = [
+            {"type": "image_url", "image_url": {"url": data_url}},
+            {"type": "text", "text": prompt},
+        ]
+    else:
+        current_content = prompt
+
     api_messages.append({"role": "user", "content": current_content})
 
-    # Clear pending image after use
     st.session_state.pending_image = None
 
-    # ── Stream the response ────────────────────────────────────────────────────
-    client = anthropic.Anthropic(api_key=api_key)
+    # Stream response
+    client = Groq(api_key=api_key)
 
     with st.chat_message("assistant"):
+        if img_info:
+            st.caption(f"Using vision model: {VISION_MODEL}")
         placeholder = st.empty()
         full_response = ""
 
         try:
-            with client.messages.stream(
-                model=model,
-                max_tokens=2048,
-                system=SYSTEM_PROMPT,
+            stream = client.chat.completions.create(
+                model=active_model,
                 messages=api_messages,
-            ) as stream:
-                for chunk in stream.text_stream:
-                    full_response += chunk
+                max_tokens=2048,
+                stream=True,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    full_response += delta
                     placeholder.markdown(full_response + "▌")
 
             placeholder.markdown(full_response)
 
-        except anthropic.AuthenticationError:
-            placeholder.error("❌ Invalid API key. Check the key in the sidebar.")
-            st.stop()
-        except anthropic.RateLimitError:
-            placeholder.error("❌ Rate limit hit. Wait a moment and try again.")
-            st.stop()
         except Exception as exc:
-            placeholder.error(f"❌ Error: {exc}")
+            err = str(exc)
+            if "401" in err or "invalid_api_key" in err.lower() or "authentication" in err.lower():
+                placeholder.error("❌ Invalid API key — check the key in the sidebar.")
+            elif "rate" in err.lower():
+                placeholder.error("❌ Rate limit hit — wait a moment and try again.")
+            else:
+                placeholder.error(f"❌ Error: {exc}")
             st.stop()
 
-    # Save assistant reply
     st.session_state.messages.append({
         "role": "assistant",
         "text": full_response,
